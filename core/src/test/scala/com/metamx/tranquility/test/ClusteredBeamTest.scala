@@ -586,9 +586,9 @@ class ClusteredBeamTest extends FunSuite with CuratorRequiringSuite with BeforeA
       jm =>
         jm.registerModule(DefaultScalaModule)
     }
-    val meta1 = ClusteredBeamMeta.fromBytes(objectMapper, s.getBytes(Charsets.UTF_8)).right.get
+    val meta1 = ClusteredBeamMeta.fromBytes(objectMapper, s.getBytes(Charsets.UTF_8))
     checkMeta(meta1)
-    checkMeta(ClusteredBeamMeta.fromBytes(objectMapper, meta1.toBytes(objectMapper)).right.get) // Round trip
+    checkMeta(ClusteredBeamMeta.fromBytes(objectMapper, meta1.toBytes(objectMapper))) // Round trip
   }
 
 }

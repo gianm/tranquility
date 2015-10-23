@@ -26,6 +26,8 @@ case class FinagleRegistryConfig(
 
 object FinagleRegistryConfig
 {
+  def default() = builder().build()
+
   /**
    * Builder for FinagleRegistryConfig objects.
    */

@@ -28,13 +28,12 @@ import com.metamx.common.scala.timekeeper.Timekeeper
 import com.metamx.common.scala.untyped._
 import com.metamx.emitter.service.ServiceEmitter
 import com.metamx.tranquility.typeclass.Timestamper
+import com.metamx.tranquility.zk.CachableCoordinatedState
 import com.twitter.util.Future
-import com.twitter.util.FuturePool
 import java.util.UUID
 import java.util.concurrent.Executors
 import org.apache.curator.framework.CuratorFramework
-import org.apache.curator.framework.recipes.locks.InterProcessSemaphoreMutex
-import org.apache.zookeeper.KeeperException.NodeExistsException
+import org.apache.curator.utils.ZKPaths
 import org.joda.time.DateTime
 import org.joda.time.DateTimeZone
 import org.joda.time.Interval
@@ -90,40 +89,18 @@ class ClusteredBeam[EventType: Timestamper, InnerBeamType <: Beam[EventType]](
 {
   require(tuning.partitions > 0, "tuning.partitions > 0")
   require(tuning.minSegmentsPerBeam > 0, "tuning.minSegmentsPerBeam > 0")
-  require(tuning.maxSegmentsPerBeam >= tuning.minSegmentsPerBeam, "tuning.maxSegmentsPerBeam >= tuning.minSegmentsPerBeam")
-
-  // Thread pool for blocking zk operations
-  private[this] val zkFuturePool = FuturePool(
-    Executors.newSingleThreadExecutor(
-      new ThreadFactoryBuilder()
-        .setDaemon(true)
-        .setNameFormat("ClusteredBeam-ZkFuturePool-%s" format UUID.randomUUID)
-        .build()
-    )
+  require(
+    tuning.maxSegmentsPerBeam >= tuning.minSegmentsPerBeam,
+    "tuning.maxSegmentsPerBeam >= tuning.minSegmentsPerBeam"
   )
 
-  // Location of beam-related metadata in ZooKeeper.
-  private[this] def zpath(path: String): String = {
-    require(path.nonEmpty, "path must be nonempty")
-    "%s/%s/%s" format(zkBasePath, identifier, path)
-  }
-
-  private[this] def zpathWithDefault(path: String, default: => Array[Byte]): String = {
-    zpath(path) withEffect {
-      p =>
-        if (curator.checkExists().forPath(p) == null) {
-          try {
-            curator.create().creatingParentsIfNeeded().forPath(p, default)
-          }
-          catch {
-            case e: NodeExistsException => // suppress
-          }
-        }
-    }
-  }
-
-  // Mutex for modifying beam metadata.
-  private[this] val mutex = new InterProcessSemaphoreMutex(curator, zpath("mutex"))
+  // Thread pool for blocking zk operations
+  private[this] val zkExec = Executors.newSingleThreadExecutor(
+    new ThreadFactoryBuilder()
+      .setDaemon(true)
+      .setNameFormat("ClusteredBeam-ZkExec-%s" format UUID.randomUUID)
+      .build()
+  )
 
   // We will refuse to create beams earlier than this timestamp. The purpose of this is to prevent recreating beams
   // that we thought were closed.
@@ -137,39 +114,14 @@ class ClusteredBeam[EventType: Timestamper, InnerBeamType <: Beam[EventType]](
   // Lock updates to "localLatestCloseTime" and "beams" to prevent races.
   private[this] val beamWriteMonitor = new AnyRef
 
-  private[this] lazy val data = new {
-    val dataPath = zpathWithDefault("data", ClusteredBeamMeta.empty.toBytes(objectMapper))
-
-    def modify(f: ClusteredBeamMeta => ClusteredBeamMeta): Future[ClusteredBeamMeta] = zkFuturePool {
-      mutex.acquire()
-      try {
-        curator.sync().forPath(dataPath)
-        val prevMeta = ClusteredBeamMeta.fromBytes(objectMapper, curator.getData.forPath(dataPath)).fold(
-          e => {
-            emitAlert(e, log, emitter, WARN, "Failed to read beam data from cache: %s" format identifier, alertMap)
-            throw e
-          },
-          meta => meta
-        )
-        val newMeta = f(prevMeta)
-        if (newMeta != prevMeta) {
-          val newMetaBytes = newMeta.toBytes(objectMapper)
-          log.info("Writing new beam data to[%s]: %s", dataPath, new String(newMetaBytes))
-          curator.setData().forPath(dataPath, newMetaBytes)
-        }
-        newMeta
-      }
-      catch {
-        case e: Throwable =>
-          // Log Throwables to avoid invisible errors caused by https://github.com/twitter/util/issues/100.
-          log.error(e, "Failed to update cluster state: %s", identifier)
-          throw e
-      }
-      finally {
-        mutex.release()
-      }
-    }
-  }
+  private[this] lazy val data = new CachableCoordinatedState[ClusteredBeamMeta](
+    curator,
+    ZKPaths.makePath(zkBasePath, identifier),
+    zkExec,
+    ClusteredBeamMeta.empty,
+    _.toBytes(objectMapper),
+    ClusteredBeamMeta.fromBytes(objectMapper, _)
+  )
 
   @volatile private[this] var open = true
 
@@ -250,7 +202,8 @@ class ClusteredBeam[EventType: Timestamper, InnerBeamType <: Beam[EventType]](
                 )
                 val tsNewDicts = tsPrevDicts ++ ((tsPrevDicts.size until tuning.partitions) map {
                   partition =>
-                    newInnerBeamDictsByPartition.getOrElseUpdate(partition, {
+                    newInnerBeamDictsByPartition.getOrElseUpdate(
+                    partition, {
                       // Create sub-beams and then immediately close them, just so we can get the dict representations.
                       // Close asynchronously, ignore return value.
                       beamMaker.newBeam(intervalToCover, partition).withFinally(_.close()) {
@@ -259,7 +212,8 @@ class ClusteredBeam[EventType: Timestamper, InnerBeamType <: Beam[EventType]](
                           log.info("Created beam: %s", objectMapper.writeValueAsString(beamDict))
                           beamDict
                       }
-                    })
+                    }
+                    )
                 })
                 (ts.millis, tsNewDicts)
               })
@@ -345,13 +299,15 @@ class ClusteredBeam[EventType: Timestamper, InnerBeamType <: Beam[EventType]](
         Nil
       }
     }
-    val warmingBeams = Future.collect(for (
-      latestEvent <- grouped.lastOption.map(_._2.maxBy(timestamper(_).millis)).map(timestamper).toList;
-      tbwTimestamp <- toBeWarmed(latestEvent, latestEvent + tuning.warmingPeriod) if tbwTimestamp > latestEvent
-    ) yield {
-      // Create beam asynchronously
-      beam(tbwTimestamp, now)
-    })
+    val warmingBeams = Future.collect(
+      for (
+        latestEvent <- grouped.lastOption.map(_._2.maxBy(timestamper(_).millis)).map(timestamper).toList;
+        tbwTimestamp <- toBeWarmed(latestEvent, latestEvent + tuning.warmingPeriod) if tbwTimestamp > latestEvent
+      ) yield {
+        // Create beam asynchronously
+        beam(tbwTimestamp, now)
+      }
+    )
     // Propagate data
     val countFutures = for ((timestamp, eventGroup) <- grouped) yield {
       beam(timestamp, now) onFailure {
@@ -409,6 +365,7 @@ class ClusteredBeam[EventType: Timestamper, InnerBeamType <: Beam[EventType]](
       open = false
       val closeFuture = Future.collect(beams.values.toList map (_.close())) map (_ => ())
       beams.clear()
+      zkExec.shutdown()
       closeFuture
     }
   }
@@ -441,21 +398,15 @@ object ClusteredBeamMeta
 {
   def empty = ClusteredBeamMeta(new DateTime(0, ISOChronology.getInstanceUTC), Map.empty)
 
-  def fromBytes[A](objectMapper: ObjectMapper, bytes: Array[Byte]): Either[Exception, ClusteredBeamMeta] = {
-    try {
-      val d = objectMapper.readValue(bytes, classOf[Dict])
-      val beams: Map[Long, Seq[Dict]] = dict(d.getOrElse("beams", Dict())) map {
-        case (k, vs) =>
-          val ts = new DateTime(k, ISOChronology.getInstanceUTC)
-          val beamDicts = list(vs) map (dict(_))
-          (ts.millis, beamDicts)
-      }
-      val latestCloseTime = new DateTime(d.getOrElse("latestCloseTime", 0L), ISOChronology.getInstanceUTC)
-      Right(ClusteredBeamMeta(latestCloseTime, beams))
+  def fromBytes[A](objectMapper: ObjectMapper, bytes: Array[Byte]): ClusteredBeamMeta = {
+    val d = objectMapper.readValue(bytes, classOf[Dict])
+    val beams: Map[Long, Seq[Dict]] = dict(d.getOrElse("beams", Dict())) map {
+      case (k, vs) =>
+        val ts = new DateTime(k, ISOChronology.getInstanceUTC)
+        val beamDicts = list(vs) map (dict(_))
+        (ts.millis, beamDicts)
     }
-    catch {
-      case e: Exception =>
-        Left(e)
-    }
+    val latestCloseTime = new DateTime(d.getOrElse("latestCloseTime", 0L), ISOChronology.getInstanceUTC)
+    ClusteredBeamMeta(latestCloseTime, beams)
   }
 }

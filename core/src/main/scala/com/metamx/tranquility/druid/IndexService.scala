@@ -53,15 +53,18 @@ class IndexService(
     Await.result(client.close())
   }
 
-  def submit(task: Task): Future[TaskId] = {
-    val taskJson = druidObjectMapper.writeValueAsBytes(task)
+  def submit(taskJson: Array[Byte]): Future[TaskId] = {
     val taskRequest = HttpPost("/druid/indexer/v1/task") withEffect {
       req =>
         req.headers.set("Content-Type", "application/json")
         req.headers.set("Content-Length", taskJson.length)
         req.setContent(ChannelBuffers.wrappedBuffer(taskJson))
     }
-    log.info("Creating druid indexing task with id: %s (service = %s)", task.getId, environment.indexService)
+    log.debug(
+      "Creating druid indexing task (service = %s): %s",
+      environment.indexService,
+      Jackson.pretty(Jackson.parse[Dict](new String(taskJson)))
+    )
     call(taskRequest) map {
       d =>
         str(d("task"))
@@ -70,6 +73,8 @@ class IndexService(
         log.info("Created druid indexing task with id: %s (service = %s)", taskId, environment.indexService)
     }
   }
+
+  def submit(task: Task): Future[TaskId] = submit(druidObjectMapper.writeValueAsBytes(task))
 
   def status(taskId: TaskId): Future[IndexStatus] = {
     val statusRequest = HttpGet("/druid/indexer/v1/task/%s/status" format taskId)
