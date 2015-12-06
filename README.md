@@ -18,7 +18,7 @@ other alternatives are the Samza and Storm APIs, described in the following sect
 You can set up and use a Finagle Service like this:
 
 ```java
-final String indexService = "overlord"; // Your overlord's service name.
+final String indexService = "druid/overlord"; // Your overlord's service name.
 final String discoveryPath = "/druid/discovery"; // Your overlord's druid.discovery.curator.path
 final String dataSource = "foo";
 final List<String> dimensions = ImmutableList.of("bar", "qux");
@@ -87,7 +87,7 @@ curator.close();
 Or in Scala:
 
 ```scala
-val indexService = "overlord" // Your overlord's druid.service, with slashes replaced by colons.
+val indexService = "druid/overlord" // Your overlord's druid.service.
 val discoveryPath = "/druid/discovery" // Your overlord's druid.discovery.curator.path.
 val dataSource = "foo"
 val dimensions = Seq("bar", "qux")
@@ -206,7 +206,7 @@ public class MyBeamFactory implements BeamFactory
         .builder(timestamper)
         .curator(curator)
         .discoveryPath("/druid/discovery")
-        .location(DruidLocation.create("overlord", "druid:firehose:%s", dataSource))
+        .location(DruidLocation.create("druid/overlord", "druid:firehose:%s", dataSource))
         .rollup(DruidRollup.create(dimensions, aggregators, QueryGranularity.MINUTE))
         .tuning(
             ClusteredBeamTuning.builder()
@@ -239,7 +239,7 @@ class MyBeamFactory extends BeamFactory[Map[String, Any]]
     )
     curator.start()
 
-    val indexService = "overlord" // Your overlord's druid.service, with slashes replaced by colons.
+    val indexService = "druid/overlord" // Your overlord's druid.service.
     val discoveryPath = "/druid/discovery" // Your overlord's druid.discovery.curator.path.
     val dataSource = "foo"
     val dimensions = Seq("bar")
@@ -289,7 +289,7 @@ lazy val makeBeam : Beam[SimpleEvent] = {
     )
     curator.start()
 
-    val indexService = "overlord" // Your overlord's druid.service, with slashes replaced by colons.
+    val indexService = "druid/overlord" // Your overlord's druid.service.
     val firehosePattern = "druid:firehose:%s" // Make up a service pattern, include %s somewhere in it.
     val discoveryPath = "/druid/discovery"     // Your overlord's druid.discovery.curator.path
     val dataSource = "foo"
