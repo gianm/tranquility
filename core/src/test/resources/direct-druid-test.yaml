@@ -26,6 +26,8 @@ dataSources:
       tuningConfig:
         type: realtime
         buildV9Directly: true
+        indexSpec:
+          bitmap: roaring
 
 properties:
   druid.discovery.curator.path: /disco-fever

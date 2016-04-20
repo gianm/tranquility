@@ -50,6 +50,7 @@ import com.metamx.tranquility.typeclass.ObjectWriter
 import com.metamx.tranquility.typeclass.Timestamper
 import com.twitter.finagle.Service
 import io.druid.data.input.impl.TimestampSpec
+import io.druid.segment.indexing.RealtimeTuningConfig
 import io.druid.segment.realtime.FireDepartment
 import java.{lang => jl}
 import java.{util => ju}
@@ -187,9 +188,16 @@ object DruidBeams
       case _ => xs.asScala.toSet
     }
     val environment = DruidEnvironment(config.propertiesBasedConfig.druidIndexingServiceName)
-    // Don't require people to specify a needless ioConfig
-    val specMap = Map("ioConfig" -> Dict("type" -> "realtime")) ++ config.specMap
-    val fireDepartment = DruidGuicer.Default.objectMapper.convertValue(normalizeJava(specMap), classOf[FireDepartment])
+    // 1) Don't require people to specify a needless ioConfig
+    // 2) Don't parse tuningConfig, since we're going to pass it along as-is later
+    val fireDepartment = DruidGuicer.Default.objectMapper.convertValue(
+      normalizeJava(
+        Map("ioConfig" -> Dict("type" -> "realtime"))
+          ++ config.specMap
+          ++ Map("tuningConfig" -> Dict("type" -> "realtime"))
+      ),
+      classOf[FireDepartment]
+    )
     require(fireDepartment.getIOConfig.getFirehoseFactory == null, "Expected null 'firehose'")
     require(fireDepartment.getIOConfig.getFirehoseFactoryV2 == null, "Expected null 'firehoseV2'")
     require(fireDepartment.getIOConfig.getPlumberSchool == null, "Expected null 'plumber'")
@@ -224,6 +232,10 @@ object DruidBeams
       aggregators = fireDepartment.getDataSchema.getAggregators,
       indexGranularity = fireDepartment.getDataSchema.getGranularitySpec.getQueryGranularity
     )
+    val tuningMap = Option(config.specMap.getOrElse("tuningConfig", null)).map(dict(_)).getOrElse(Map.empty)
+    val windowPeriod = tuningMap.get("windowPeriod").map(new Period(_)).getOrElse(
+      RealtimeTuningConfig.makeDefaultTuningConfig().getWindowPeriod
+    )
     builder(inputFnFn(rollup, timestampSpec), timestamperFn(timestampSpec))
       .curatorFactory(
         CuratorFrameworkFactory.builder()
@@ -238,10 +250,10 @@ object DruidBeams
       .tuning(
         ClusteredBeamTuning(
           segmentGranularity = fireDepartment.getDataSchema.getGranularitySpec.getSegmentGranularity,
-          windowPeriod = fireDepartment.getTuningConfig.getWindowPeriod
+          windowPeriod = windowPeriod
         )
       )
-      .druidTuningMap(Option(specMap.getOrElse("tuningConfig", null)).map(dict(_)).getOrElse(Map.empty))
+      .druidTuningMap(tuningMap)
       .partitions(config.propertiesBasedConfig.taskPartitions)
       .replicants(config.propertiesBasedConfig.taskReplicants)
       .druidBeamConfig(config.propertiesBasedConfig.druidBeamConfig)

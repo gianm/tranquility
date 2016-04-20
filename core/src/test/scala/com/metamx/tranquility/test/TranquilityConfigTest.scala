@@ -87,7 +87,8 @@ class TranquilityConfigTest extends FunSuite with ShouldMatchers
         "buildV9Directly" -> true,
         "intermediatePersistPeriod" -> "PT45S",
         "windowPeriod" -> "PT30S",
-        "maxPendingPersists" -> 0
+        "maxPendingPersists" -> 0,
+        "indexSpec" -> Map("bitmap" -> "roaring")
       ))
       builder.config._tuning.get.windowPeriod should be(new Period("PT30S"))
     }
@@ -116,7 +117,8 @@ class TranquilityConfigTest extends FunSuite with ShouldMatchers
         "buildV9Directly" -> true,
         "intermediatePersistPeriod" -> "PT45S",
         "windowPeriod" -> "PT30S",
-        "maxPendingPersists" -> 0
+        "maxPendingPersists" -> 0,
+        "indexSpec" -> Map("bitmap" -> "roaring")
       ))
       builder.config._tuning.get.windowPeriod should be(new Period("PT30S"))
     }
