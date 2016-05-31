@@ -60,6 +60,8 @@ trait DruidIntegrationSuite extends Logging with CuratorRequiringSuite
 {
   self: FunSuite =>
 
+  val QueryResultTimeout = 600000L
+
   trait DruidServerHandle
   {
     def injector: Injector
@@ -204,7 +206,7 @@ trait DruidIntegrationSuite extends Logging with CuratorRequiringSuite
 
     var got: Seq[Dict] = null
     val start = System.currentTimeMillis()
-    while (got != expected && System.currentTimeMillis() < start + 300000L) {
+    while (got != expected && System.currentTimeMillis() < start + QueryResultTimeout) {
       got = Jackson.parse[Seq[Dict]](
         brokerObjectMapper.writeValueAsBytes(query.run(walker, Map.empty[String, AnyRef].asJava))
       )

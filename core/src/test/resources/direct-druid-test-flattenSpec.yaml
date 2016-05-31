@@ -48,6 +48,8 @@ dataSources:
 properties:
   druid.discovery.curator.path: /disco-fever
   druid.selectors.indexing.serviceName: druid/tranquility/indexer
+  druidBeam.firehoseQuietPeriod: PT15M
+  druidBeam.firehoseRetryPeriod: PT15M
   zookeeper.connect: @ZKPLACEHOLDER@
   tranquility.batchSize: 1000
   tranquility.lingerMillis: 1000

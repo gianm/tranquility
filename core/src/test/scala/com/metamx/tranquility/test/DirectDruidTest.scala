@@ -103,6 +103,10 @@ object DirectDruidTest
       "druid:tranquility:firehose:%s"
     )
     val druidLocation = new DruidLocation(druidEnvironment, dataSource)
+    val druidBeamConfig = DruidBeamConfig(
+      firehoseQuietPeriod = 15.minutes,
+      firehoseRetryPeriod = 15.minutes
+    )
     DruidBeams.builder[SimpleEvent]()
       .curator(curator)
       .discoveryPath("/disco-fever")
@@ -110,6 +114,7 @@ object DirectDruidTest
       .rollup(rollup)
       .tuning(tuning)
       .timekeeper(timekeeper)
+      .druidBeamConfig(druidBeamConfig)
       .timestampSpec(new TimestampSpec(TimeColumn, TimeFormat, null))
       .beamMergeFn(beams => new RoundRobinBeam(beams.toIndexedSeq))
   }
